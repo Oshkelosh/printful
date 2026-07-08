@@ -1,0 +1,9 @@
+{
+  "addon_id": "printful",
+  "addon_name": "Printful",
+  "addon_description": "Print-on-demand supplier for custom apparel and accessories.",
+  "category": "supplier",
+  "version": "1.0.0",
+  "min_oshkelosh_version": "0.1.0",
+  "python_requires": ">=3.11"
+}

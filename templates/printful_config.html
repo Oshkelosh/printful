@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}Printful Settings{% endblock %}
+
+{% block content %}
+<h1>Printful Supplier</h1>
+
+<div class="card">
+    <h2>Configuration</h2>
+    {% if config %}
+    <div class="alert alert--info" style="margin-bottom:1em;">
+        <strong>Status:</strong> {% if addon and addon.is_enabled %}Enabled{% else %}Disabled{% endif %}
+    </div>
+    {% endif %}
+
+    <form method="post" action="/admin/suppliers/printful/save" class="form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        <div class="form-group">
+            <label for="api_key">API Key</label>
+            <input type="password" id="api_key" name="api_key"
+                   value=""
+                   placeholder="{% if config.get('api_key') %}Key saved — paste to replace{% else %}Printful API key{% endif %}" />
+            {% if config.get('api_key') %}
+            <small style="color:var(--clr-text-muted);display:block;margin-top:4px;">
+                After upgrading Oshkelosh, re-paste your Printful private token and save once
+                if catalog sync reports an invalid access token.
+            </small>
+            {% endif %}
+        </div>
+
+        <div class="form-group">
+            <label>
+                <input type="checkbox" name="is_active" {% if config.get('is_active') %}checked{% endif %} />
+                Active
+            </label>
+        </div>
+
+        <div class="form-group">
+            <label>
+                <input type="checkbox" name="auto_confirm"
+                       {% if config.get('auto_confirm', True) %}checked{% endif %} />
+                Auto-confirm orders after payment
+            </label>
+            <small style="color:var(--clr-text-muted);display:block;margin-top:4px;">
+                When unchecked, Printful creates draft orders only (useful for development).
+            </small>
+        </div>
+
+        <div class="form-actions">
+            <button type="submit" class="btn btn--primary">Save Configuration</button>
+        </div>
+    </form>
+</div>
+
+<div class="card" style="margin-top:1.5em;">
+    <h2>Catalog sync</h2>
+    <p style="color:var(--clr-text-muted);margin-bottom:12px;">
+        Import Printful sync variants into Oshkelosh products (one local product per variant).
+        Re-sync updates name, price, SKU, and supplier tags. Manual edits to those fields
+        will be overwritten on the next sync.
+    </p>
+    <form method="post" action="/admin/suppliers/printful/sync" class="form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-group">
+            <label for="import_status">Import as</label>
+            <select id="import_status" name="import_status">
+                <option value="draft" selected>Draft</option>
+                <option value="published">Published</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>
+                <input type="checkbox" name="archive_missing" />
+                Archive local products no longer in Printful catalog
+            </label>
+        </div>
+        <div class="form-actions">
+            <button type="submit" class="btn btn--secondary">Sync catalog now</button>
+        </div>
+    </form>
+</div>
+
+<div class="card" style="margin-top:1.5em;">
+    <h2>Product linkage</h2>
+    <p style="color:var(--clr-text-muted);">
+        Assign products to Printful in the product editor. Use the Printful
+        <strong>sync variant ID</strong> as the supplier product ID.
+    </p>
+</div>
+
+<div class="card" style="margin-top:1.5em;">
+    <h2>API Endpoints</h2>
+    <table class="table">
+        <thead>
+            <tr><th>Method</th><th>Endpoint</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>GET</code></td>
+                <td><code>/api/v1/suppliers/printful/products</code></td>
+                <td>List Printful sync variants</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<p style="margin-top:24px;">
+  <a href="/admin/suppliers">← Back to suppliers</a>
+</p>
+{% endblock %}

@@ -1,0 +1,1 @@
+"""Printful supplier addon package."""
