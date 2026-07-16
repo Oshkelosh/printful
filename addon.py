@@ -31,6 +31,7 @@ from app.addons.suppliers.printful.client import (
     PrintfulClient,
     build_order_items,
     map_recipient,
+    pick_shipping_rate_cents,
 )
 from schemas.supplier import SupplierAssignment, SupplierCatalogProduct
 from app.addons.log import info, warning
@@ -354,6 +355,32 @@ class PrintfulAddon(SupplierAddon):
         client = self._require_client()
         data = await client.get_sync_product(product_id)
         return data.get("result", data)
+
+    def supports_shipping_quotes(self) -> bool:
+        return True
+
+    async def quote_shipping(
+        self,
+        items: list[dict[str, Any]],
+        shipping_address: dict[str, Any],
+    ) -> int | None:
+        """Live Printful rates; prefer STANDARD, else cheapest. None → Site Settings."""
+        client = self._require_client()
+        try:
+            order_items = build_order_items(items)
+            if not order_items:
+                return None
+            recipient = map_recipient(shipping_address or {})
+            data = await client.get_shipping_rates(recipient, order_items)
+            result = data.get("result", data)
+            rates = result if isinstance(result, list) else []
+            return pick_shipping_rate_cents(rates)
+        except PrintfulAPIError as exc:
+            warning("Printful", "quote_shipping error: {}", exc)
+            return None
+        except Exception:
+            warning("Printful", "quote_shipping unexpected error", exc_info=True)
+            return None
 
     async def create_order(
         self,

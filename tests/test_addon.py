@@ -1,5 +1,7 @@
 """Unit tests for the Printful supplier addon."""
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 from app.addons.suppliers.printful.addon import PrintfulAddon, PrintfulConfig
@@ -24,3 +26,38 @@ class TestPrintfulAddon:
     def test_printful_config_requires_api_key(self):
         with pytest.raises(Exception):
             PrintfulConfig()
+
+    def test_supports_shipping_quotes(self):
+        assert PrintfulAddon().supports_shipping_quotes() is True
+
+    @pytest.mark.asyncio
+    async def test_quote_shipping_returns_cents(self, monkeypatch):
+        addon = PrintfulAddon()
+        addon._client = AsyncMock()
+        addon._client.get_shipping_rates = AsyncMock(
+            return_value={
+                "result": [
+                    {"id": "STANDARD", "rate": "12.34"},
+                ]
+            }
+        )
+        cents = await addon.quote_shipping(
+            [{"supplier_product_id": "99", "quantity": 1}],
+            {"line1": "1 Main", "city": "Austin", "postal_code": "78701", "country": "US"},
+        )
+        assert cents == 1234
+
+    @pytest.mark.asyncio
+    async def test_quote_shipping_returns_none_on_api_error(self, monkeypatch):
+        from app.addons.suppliers.printful.client import PrintfulAPIError
+
+        addon = PrintfulAddon()
+        addon._client = AsyncMock()
+        addon._client.get_shipping_rates = AsyncMock(
+            side_effect=PrintfulAPIError("bad request", status_code=400)
+        )
+        cents = await addon.quote_shipping(
+            [{"supplier_product_id": "99", "quantity": 1}],
+            {"country": "US"},
+        )
+        assert cents is None

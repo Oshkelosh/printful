@@ -50,6 +50,7 @@ GET `/api/v1/suppliers/printful/products/{product_id}` — single product detail
 
 - **Variant supplier fields:** paid-order fulfillment reads Printful IDs from each **ProductVariant** row
 - **Fulfillment:** calls Printful order API; optional auto-confirm after create
+- **Checkout shipping:** when enabled, core calls `quote_shipping()` → `POST /shipping/rates` for Printful line items (prefers STANDARD, else cheapest). Unquoted or failed quotes fall back to Site Settings like any other supplier addon.
 - **Grouping:** line items grouped by fulfillment key `printful`
 
 ## Variant supplier fields

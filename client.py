@@ -85,6 +85,19 @@ class PrintfulClient:
             json=payload,
         )
 
+    async def get_shipping_rates(
+        self,
+        recipient: dict[str, Any],
+        items: list[dict[str, Any]],
+        *,
+        currency: str | None = None,
+    ) -> dict[str, Any]:
+        """POST /shipping/rates — available methods and prices for a cart."""
+        body: dict[str, Any] = {"recipient": recipient, "items": items}
+        if currency:
+            body["currency"] = currency
+        return await self._request("POST", "/shipping/rates", json=body)
+
     async def confirm_order(self, order_id: str) -> dict[str, Any]:
         return await self._request("POST", f"/orders/{order_id}/confirm")
 
@@ -101,15 +114,24 @@ class PrintfulClient:
 
 def map_recipient(shipping_address: dict[str, Any]) -> dict[str, str]:
     """Map Oshkelosh shipping_address keys to Printful recipient fields."""
+    from app.services.countries import normalize_country_code
+
     first = shipping_address.get("first_name", "")
     last = shipping_address.get("last_name", "")
-    name = shipping_address.get("name") or f"{first} {last}".strip() or "Customer"
+    name = (
+        shipping_address.get("full_name")
+        or shipping_address.get("name")
+        or f"{first} {last}".strip()
+        or "Customer"
+    )
+    country_raw = shipping_address.get("country") or shipping_address.get("country_code")
+    country_code = normalize_country_code(str(country_raw) if country_raw else None) or "US"
     recipient: dict[str, str] = {
-        "name": name,
+        "name": str(name),
         "address1": shipping_address.get("line1") or shipping_address.get("address1") or "",
-        "city": shipping_address.get("city", ""),
+        "city": shipping_address.get("city", "") or "",
         "state_code": shipping_address.get("state") or shipping_address.get("state_code") or "",
-        "country_code": shipping_address.get("country") or shipping_address.get("country_code") or "US",
+        "country_code": country_code,
         "zip": shipping_address.get("zip") or shipping_address.get("postal_code") or "",
     }
     line2 = shipping_address.get("line2") or shipping_address.get("address2")
@@ -142,3 +164,34 @@ def build_order_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
             qty = 1
         order_items.append({"sync_variant_id": sync_variant_id, "quantity": max(qty, 1)})
     return order_items
+
+
+def pick_shipping_rate_cents(rates: list[dict[str, Any]]) -> int | None:
+    """Prefer STANDARD (or name containing it); else cheapest. Rates are dollar strings."""
+    from decimal import Decimal, ROUND_HALF_UP
+
+    parsed: list[tuple[dict[str, Any], int]] = []
+    for rate in rates:
+        if not isinstance(rate, dict):
+            continue
+        raw = rate.get("rate")
+        if raw is None:
+            continue
+        try:
+            cents = int(
+                (Decimal(str(raw)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+            )
+        except Exception:
+            continue
+        parsed.append((rate, max(0, cents)))
+    if not parsed:
+        return None
+
+    def _is_standard(rate: dict[str, Any]) -> bool:
+        rid = str(rate.get("id") or rate.get("shipping") or "").upper()
+        name = str(rate.get("name") or rate.get("shipping_method_name") or "").upper()
+        return "STANDARD" in rid or "STANDARD" in name or "FLAT RATE" in name
+
+    standard = [pair for pair in parsed if _is_standard(pair[0])]
+    pool = standard or parsed
+    return min(cents for _, cents in pool)
