@@ -114,35 +114,20 @@ class PrintfulClient:
 
 def map_recipient(shipping_address: dict[str, Any]) -> dict[str, str]:
     """Map Oshkelosh shipping_address keys to Printful recipient fields."""
-    from app.services.countries import normalize_country_code
+    from app.addons.suppliers.address import canonical_address
 
-    first = shipping_address.get("first_name", "")
-    last = shipping_address.get("last_name", "")
-    name = (
-        shipping_address.get("full_name")
-        or shipping_address.get("name")
-        or f"{first} {last}".strip()
-        or "Customer"
-    )
-    country_raw = shipping_address.get("country") or shipping_address.get("country_code")
-    country_code = normalize_country_code(str(country_raw) if country_raw else None) or "US"
+    addr = canonical_address(shipping_address)
     recipient: dict[str, str] = {
-        "name": str(name),
-        "address1": shipping_address.get("line1") or shipping_address.get("address1") or "",
-        "city": shipping_address.get("city", "") or "",
-        "state_code": shipping_address.get("state") or shipping_address.get("state_code") or "",
-        "country_code": country_code,
-        "zip": shipping_address.get("zip") or shipping_address.get("postal_code") or "",
+        "name": addr["name"],
+        "address1": addr["line1"],
+        "city": addr["city"],
+        "state_code": addr["state"],
+        "country_code": addr["country_code"] or "US",
+        "zip": addr["zip"],
     }
-    line2 = shipping_address.get("line2") or shipping_address.get("address2")
-    if line2:
-        recipient["address2"] = str(line2)
-    email = shipping_address.get("email")
-    if email:
-        recipient["email"] = str(email)
-    phone = shipping_address.get("phone")
-    if phone:
-        recipient["phone"] = str(phone)
+    for src, dst in (("line2", "address2"), ("email", "email"), ("phone", "phone")):
+        if addr[src]:
+            recipient[dst] = addr[src]
     return recipient
 
 
@@ -168,30 +153,54 @@ def build_order_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def pick_shipping_rate_cents(rates: list[dict[str, Any]]) -> int | None:
     """Prefer STANDARD (or name containing it); else cheapest. Rates are dollar strings."""
-    from decimal import Decimal, ROUND_HALF_UP
+    options = parse_shipping_rate_options(rates)
+    chosen = pick_shipping_option(options, selected_id=None)
+    return chosen["cents"] if chosen else None
 
-    parsed: list[tuple[dict[str, Any], int]] = []
+
+def parse_shipping_rate_options(rates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Normalize Printful /shipping/rates rows into checkout options."""
+    from app.addons.suppliers.shipping_quote import to_cents
+
+    options: list[dict[str, Any]] = []
     for rate in rates:
         if not isinstance(rate, dict):
             continue
-        raw = rate.get("rate")
-        if raw is None:
+        cents = to_cents(rate.get("rate"))
+        if cents is None:
             continue
-        try:
-            cents = int(
-                (Decimal(str(raw)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-            )
-        except Exception:
+        option_id = str(
+            rate.get("id") or rate.get("shipping") or rate.get("code") or ""
+        ).strip()
+        if not option_id:
             continue
-        parsed.append((rate, max(0, cents)))
-    if not parsed:
-        return None
+        name = str(
+            rate.get("name")
+            or rate.get("shipping_method_name")
+            or option_id
+        ).strip()
+        option: dict[str, Any] = {
+            "id": option_id,
+            "name": name,
+            "cents": max(0, cents),
+        }
+        for key in ("min_delivery_days", "max_delivery_days"):
+            value = rate.get(key)
+            if value is not None:
+                try:
+                    option[key] = int(value)
+                except (TypeError, ValueError):
+                    pass
+        options.append(option)
+    return options
 
-    def _is_standard(rate: dict[str, Any]) -> bool:
-        rid = str(rate.get("id") or rate.get("shipping") or "").upper()
-        name = str(rate.get("name") or rate.get("shipping_method_name") or "").upper()
-        return "STANDARD" in rid or "STANDARD" in name or "FLAT RATE" in name
 
-    standard = [pair for pair in parsed if _is_standard(pair[0])]
-    pool = standard or parsed
-    return min(cents for _, cents in pool)
+def pick_shipping_option(
+    options: list[dict[str, Any]],
+    *,
+    selected_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Resolve a selected method, else STANDARD/flat rate, else cheapest (shared helper)."""
+    from app.addons.suppliers.shipping_quote import pick_shipping_option as _shared
+
+    return _shared(options, selected_id=selected_id, preferred_ids=("standard", "flat rate"))

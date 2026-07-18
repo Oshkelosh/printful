@@ -111,3 +111,45 @@ class TestPrintfulAddon:
             {"country": "US"},
         )
         assert cents is None
+
+    @pytest.mark.asyncio
+    async def test_quote_shipping_details_honors_selected_method(self):
+        addon = PrintfulAddon()
+        addon._client = AsyncMock()
+        addon._rate_variant_ids = {"99": 4011}
+        addon._client.get_shipping_rates = AsyncMock(
+            return_value={
+                "result": [
+                    {"id": "STANDARD", "name": "Flat Rate", "rate": "10.00"},
+                    {"id": "EXPRESS", "name": "Express", "rate": "22.50"},
+                ]
+            }
+        )
+        details = await addon.quote_shipping_details(
+            [{"supplier_product_id": "99", "quantity": 1}],
+            {"country": "US"},
+            selected_id="EXPRESS",
+        )
+        assert details is not None
+        assert details["cents"] == 2250
+        assert details["selected_id"] == "EXPRESS"
+        assert [row["id"] for row in details["options"]] == ["STANDARD", "EXPRESS"]
+
+    @pytest.mark.asyncio
+    async def test_create_order_sends_shipping_method(self):
+        addon = PrintfulAddon()
+        addon._config = {"auto_confirm": True}
+        addon._client = AsyncMock()
+        addon._client.create_order = AsyncMock(
+            return_value={"result": {"id": 55, "status": "draft"}}
+        )
+        result = await addon.create_order(
+            [{"supplier_product_id": "99", "quantity": 1}],
+            {"line1": "1 Main", "city": "Austin", "postal_code": "78701", "country": "US"},
+            external_id="42",
+            shipping_method="EXPRESS",
+        )
+        assert result["success"] is True
+        payload = addon._client.create_order.await_args.args[0]
+        assert payload["shipping"] == "EXPRESS"
+        assert payload["external_id"] == "42"

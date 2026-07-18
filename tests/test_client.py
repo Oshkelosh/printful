@@ -8,6 +8,8 @@ from app.addons.suppliers.printful.client import (
     PrintfulClient,
     build_order_items,
     map_recipient,
+    parse_shipping_rate_options,
+    pick_shipping_option,
     pick_shipping_rate_cents,
 )
 
@@ -64,6 +66,27 @@ def test_pick_shipping_rate_cheapest_when_no_standard():
         {"id": "ECONOMY", "name": "Economy", "rate": "9.50"},
     ]
     assert pick_shipping_rate_cents(rates) == 950
+
+
+def test_parse_shipping_rate_options_and_selected_express():
+    rates = [
+        {
+            "id": "STANDARD",
+            "name": "Flat Rate",
+            "rate": "13.60",
+            "min_delivery_days": 4,
+            "max_delivery_days": 7,
+        },
+        {"id": "EXPRESS", "name": "Express", "rate": "25.00"},
+    ]
+    options = parse_shipping_rate_options(rates)
+    assert [row["id"] for row in options] == ["STANDARD", "EXPRESS"]
+    assert options[0]["cents"] == 1360
+    assert options[0]["min_delivery_days"] == 4
+    chosen = pick_shipping_option(options, selected_id="EXPRESS")
+    assert chosen is not None
+    assert chosen["id"] == "EXPRESS"
+    assert chosen["cents"] == 2500
 
 
 @pytest.mark.asyncio

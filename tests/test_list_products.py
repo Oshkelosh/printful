@@ -98,9 +98,10 @@ async def test_fetch_catalog_for_import_returns_four_items():
 
     items = await addon.fetch_catalog_for_import()
 
-    assert len(items) == 2
-    assert all(item.skip_reason is None for item in items)
-    assert items[0].image_url == "https://example.com/10.png"
+    variants = [variant for product in items for variant in product.variants]
+    assert len(variants) == 2
+    assert all(variant.skip_reason is None for variant in variants)
+    assert variants[0].image_urls == ["https://example.com/10.png"]
 
 
 @pytest.mark.asyncio

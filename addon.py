@@ -31,7 +31,8 @@ from app.addons.suppliers.printful.client import (
     PrintfulClient,
     build_order_items,
     map_recipient,
-    pick_shipping_rate_cents,
+    parse_shipping_rate_options,
+    pick_shipping_option,
 )
 from schemas.supplier import SupplierAssignment, SupplierCatalogProduct
 from app.addons.log import info, warning
@@ -417,18 +418,46 @@ class PrintfulAddon(SupplierAddon):
         self,
         items: list[dict[str, Any]],
         shipping_address: dict[str, Any],
+        *,
+        currency: str | None = None,
     ) -> int | None:
         """Live Printful rates; prefer STANDARD, else cheapest. None → Site Settings."""
+        details = await self.quote_shipping_details(
+            items, shipping_address, currency=currency
+        )
+        if details is None:
+            return None
+        return int(details["cents"])
+
+    async def quote_shipping_details(
+        self,
+        items: list[dict[str, Any]],
+        shipping_address: dict[str, Any],
+        *,
+        selected_id: str | None = None,
+        currency: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Live Printful methods with prices; selected_id overrides the default."""
         client = self._require_client()
         try:
             rate_items = await self._shipping_rate_items(client, items)
             if not rate_items:
                 return None
             recipient = map_recipient(shipping_address or {})
-            data = await client.get_shipping_rates(recipient, rate_items)
+            data = await client.get_shipping_rates(
+                recipient, rate_items, currency=currency
+            )
             result = data.get("result", data)
             rates = result if isinstance(result, list) else []
-            return pick_shipping_rate_cents(rates)
+            options = parse_shipping_rate_options(rates)
+            chosen = pick_shipping_option(options, selected_id=selected_id)
+            if chosen is None:
+                return None
+            return {
+                "cents": int(chosen["cents"]),
+                "selected_id": str(chosen["id"]),
+                "options": options,
+            }
         except PrintfulAPIError as exc:
             warning("Printful", "quote_shipping error: {}", exc)
             return None
@@ -443,6 +472,8 @@ class PrintfulAddon(SupplierAddon):
         *,
         external_id: str | None = None,
         supplier_ref: str | None = None,
+        shipping_method: str | None = None,
+        currency: str | None = None,
     ) -> Dict[str, Any]:
         del supplier_ref
         client = self._require_client()
@@ -454,7 +485,10 @@ class PrintfulAddon(SupplierAddon):
             payload: Dict[str, Any] = {
                 "recipient": map_recipient(shipping_address),
                 "items": order_items,
+                "shipping": (shipping_method or "STANDARD").strip() or "STANDARD",
             }
+            if currency:
+                payload["currency"] = str(currency).upper()
             if external_id:
                 payload["external_id"] = external_id
 
