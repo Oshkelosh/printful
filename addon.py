@@ -66,6 +66,8 @@ class PrintfulAddon(SupplierAddon):
     _client: PrintfulClient | None = None
     _catalog_category_titles: dict[int, str] | None = None
     _catalog_product_type_cache: dict[int, str] | None = None
+    # sync_variant_id → catalog variant_id (POST /shipping/rates needs the latter)
+    _rate_variant_ids: dict[str, int] | None = None
 
     @classmethod
     def config_schema(cls):
@@ -76,6 +78,7 @@ class PrintfulAddon(SupplierAddon):
         validated = schema(**config)
         self._config = dump_addon_config(validated)
         self._client = PrintfulClient(validated.api_key.get_secret_value())
+        self._rate_variant_ids = {}
         self.is_enabled = validated.is_active
         info("Printful", "Initialized (auto_confirm={})", validated.auto_confirm)
 
@@ -101,6 +104,7 @@ class PrintfulAddon(SupplierAddon):
     async def shutdown(self) -> None:
         self._client = None
         self._config = None
+        self._rate_variant_ids = None
         self.is_enabled = False
 
     def admin_form_hints(self) -> dict[str, str | bool]:
@@ -359,6 +363,56 @@ class PrintfulAddon(SupplierAddon):
     def supports_shipping_quotes(self) -> bool:
         return True
 
+    async def _catalog_variant_id_for_sync(
+        self, client: PrintfulClient, sync_variant_id: str
+    ) -> int | None:
+        """Resolve a sync variant id to Printful catalog variant_id (cached)."""
+        cache = self._rate_variant_ids
+        if cache is None:
+            cache = {}
+            self._rate_variant_ids = cache
+        if sync_variant_id in cache:
+            return cache[sync_variant_id]
+        try:
+            data = await client.get_sync_variant(sync_variant_id)
+            detail = data.get("result", data)
+            if not isinstance(detail, dict):
+                return None
+            variant = unwrap_printful_sync_variant_payload(detail)
+            raw = variant.get("variant_id")
+            if raw is None:
+                return None
+            catalog_id = int(raw)
+        except (PrintfulAPIError, TypeError, ValueError) as exc:
+            warning(
+                "Printful",
+                "quote_shipping: could not resolve sync variant {}: {}",
+                sync_variant_id,
+                exc,
+            )
+            return None
+        cache[sync_variant_id] = catalog_id
+        return catalog_id
+
+    async def _shipping_rate_items(
+        self, client: PrintfulClient, items: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Build /shipping/rates items (catalog variant_id, not sync_variant_id)."""
+        rate_items: list[dict[str, Any]] = []
+        for item in items:
+            sync_id = item.get("supplier_product_id")
+            if not sync_id:
+                continue
+            catalog_id = await self._catalog_variant_id_for_sync(client, str(sync_id))
+            if catalog_id is None:
+                continue
+            try:
+                qty = int(item.get("quantity", 1))
+            except (TypeError, ValueError):
+                qty = 1
+            rate_items.append({"variant_id": catalog_id, "quantity": max(qty, 1)})
+        return rate_items
+
     async def quote_shipping(
         self,
         items: list[dict[str, Any]],
@@ -367,11 +421,11 @@ class PrintfulAddon(SupplierAddon):
         """Live Printful rates; prefer STANDARD, else cheapest. None → Site Settings."""
         client = self._require_client()
         try:
-            order_items = build_order_items(items)
-            if not order_items:
+            rate_items = await self._shipping_rate_items(client, items)
+            if not rate_items:
                 return None
             recipient = map_recipient(shipping_address or {})
-            data = await client.get_shipping_rates(recipient, order_items)
+            data = await client.get_shipping_rates(recipient, rate_items)
             result = data.get("result", data)
             rates = result if isinstance(result, list) else []
             return pick_shipping_rate_cents(rates)
